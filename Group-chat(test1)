@@ -1,0 +1,133 @@
+#!/usr/bin/python
+# -*- coding:utf-8 -*-
+#导入模块
+import sys
+import socket
+import threading
+import time
+
+'''
+消息的收发分别依赖三个线程:接收消息线程rcvmsg和接受用户输入的线程inputmsg->发送消息线程sndmsg
+当他们接受到消息后会进行相应的处理,线程在获得锁的状态中,有两个函数:
+notify函数(通知其他在等待的线程来获得锁),wait函数(释放锁,并进入阻塞状态,等待其他线程notify)
+'''
+
+#定义一个接收消息的类,接收消息线程一直处于激活状态,监听在端口上,它是线程,所以继承线程这个父类
+class rcvmsg(threading.Thread):
+    #初始化,传参
+    def __init__(self,HOSTRCV,PORT,BUFSIZE,SOC):
+        threading.Thread.__init__(self)
+        self.hostrcv=HOSTRCV
+        self.port=PORT
+        self.bufsize=BUFSIZE
+        self.soc=SOC
+
+    #重定义父类的run函数
+    def run(self):
+        #接收任意地址指定端口发送的消息
+        self.addrrcv=(self.hostrcv,self.port)
+        #将监听的地址和端口绑定到socket上
+        self.soc.bind(self.addrrcv)
+        while 1:
+            #接收消息的线程一直处于监听状态,等待接收发过来的消息,如果接收到消息则print
+            self.rcvdata,self.addr=self.soc.recvfrom(self.bufsize)
+            print 'receive messages from %s >>>%s'%(self.addr,self.rcvdata)
+
+#定义一个发送消息的类,继承线程父类
+class sndmsg(threading.Thread):
+    #初始化,传参
+    def __init__(self,MSG,PORT,BUFSIZE,SOC,CON):
+        threading.Thread.__init__(self)
+        self.port=PORT
+        self.bufsize=BUFSIZE
+        self.soc=SOC
+        self.con=CON
+
+    #重定义父类run函数
+    def run(self):
+        #声明一个全局变量MSG(MSG的意义主函数中有解释)
+        global MSG
+        #进入竞争同一个锁线程池
+        self.con.acquire()
+        #阻塞发送消息线程,等待接收用户消息线程(inputmsg)notify之后再运行
+        self.con.wait()
+        while 1:
+            #如果全局变量MSG变成1,则进入发送消息状态,否则继续阻塞
+            if MSG==1:
+                #接收用户输入的IP并保存到变量hostsnd
+                self.hostsnd=raw_input('which ip? >>>')
+                #消息发送的IP及端口
+                self.addrsnd=(self.hostsnd,self.port)
+                #接收用户发送的消息
+                self.snddata=raw_input("send messages >>>")
+                #通过创建的socket(SOC)和IP/端口发送消息
+                SOC.sendto(self.snddata,self.addrsnd)
+                #发送消息完成后,将全局变量MSG设置为0
+                MSG=0
+                #通知阻塞的imputmsg线程获取锁继续运行
+                self.con.notify()
+                #i自己释放锁并进入阻塞状态
+                self.con.wait()
+            #只要全局变量为0,则线程继续阻塞
+            else:
+                self.con.wait()
+        #释放锁
+        self.con.release() 
+
+#定义一个接收用户输入的类,继承线程父类                
+class inputmsg(threading.Thread):
+    #初始化,传参
+    def __init__(self,MSG,CON):
+        threading.Thread.__init__(self)
+        self.con=CON
+
+    #重定义父类run函数
+    def run(self):
+        global MSG
+        #等待一秒,等发送消息线程(sndmsg)启动后再运行,防止用户在发送消息线程未启动前,请求发送消息
+        time.sleep(1)
+        #进入竞争同一个锁线程池
+        self.con.acquire()
+        while 1:
+            #接收用户输入
+            self.keyword=raw_input(">>>")
+            #去掉输入的字符串的回车符
+            self.keyword=self.keyword.strip()
+            #若接收到的用户输入为sendto,则自身进入阻塞状态并释放锁,notify发送消息线程(sndmsg),
+            if self.keyword=='sendto':
+                MSG=1
+                self.con.notify()
+                self.con.wait()
+            elif self.keyword=='quit':
+                sys.exit()
+            else:
+                print "please use 'sendto' to send messages"
+        #释放锁
+        self.con.release() 
+
+if __name__ == '__main__':
+    global MSG
+    global SOC
+    #接收消息的地址(空表示任意地址)
+    HOSTRCV=''
+    #MSG为一个控制变量,如果MSG=0则为接收用户输入状态,如果MSG=1则为发送消息状态
+    MSG=0
+    #绑定一个端口
+    PORT=21536
+    BUFSIZE=1024
+    #创建一个socket
+    SOC=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+    #创建一个线程池
+    CON=threading.Condition()
+    #创建接收消息对象(rcv) 接收用户输入对象(ipt) 发送消息对象(snd) 
+    rcv=rcvmsg(HOSTRCV,PORT,BUFSIZE,SOC)
+    ipt=inputmsg(MSG,CON)
+    snd=sndmsg(MSG,PORT,BUFSIZE,SOC,CON)
+    print "System starting..."
+    print "Usage:entering 'sendto' to send messages"
+    #启动线程
+    rcv.start()
+    ipt.start()
+    snd.start()
+
+
