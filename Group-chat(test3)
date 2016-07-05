@@ -1,0 +1,174 @@
+# -*- coding:utf-8 -*-
+import os
+import socket
+import threading
+import time
+"""
+GroupChat由三个线程实现:1.接收消息线程rcvmsg;2.接收用户输入的线程inputmsg;3.发送消息线程sndmsg
+rcvmsg独立运行;inputmsg和sndmsg通过线程锁相互作用运行
+linux系统直接输入python udp.py命令即可执行;windows系统需要安装python应用程序即可运行
+"""
+#接收消息的类,继承父类线程
+class rcvmsg(threading.Thread):
+    try:
+        #初始化,传参
+        def __init__(self,HOSTRCV,PORT,BUFSIZE):
+            threading.Thread.__init__(self)
+            self.hostrcv=HOSTRCV
+            self.port=PORT
+            self.bufsize=BUFSIZE
+    except Exception,e:
+        print "Error!%s"%e
+        print "Quiting..."
+        SOC.close()
+        os._exit(0)
+
+    #覆盖父类run函数
+    def run(self):
+        #全局变量MSG(用于控制线程启停)和SOC套接字
+        global MSG
+        global SOC
+        #任意地址,指定端口
+        self.addrrcv=(self.hostrcv,self.port)
+        try:
+            #将监听的地址和端口绑定到socket上,接收消息
+            SOC.bind(self.addrrcv)
+        except:
+            print "Error!Please modify your port!"
+            print "Quiting..."
+            SOC.close()
+            os._exit(0)
+        while MSG != 2:
+            try:
+                #接收消息，对方IP和端口
+                self.rcvdata,self.addr=SOC.recvfrom(self.bufsize)
+                print '>>>%s :%s'%(self.addr,self.rcvdata)
+            except Exception,e:
+                print "The other side not online!"
+                pass
+
+#发送消息的类
+class sndmsg(threading.Thread):
+    try:
+        #初始化,传参
+        def __init__(self,PORT,BUFSIZE,SOC,CON):
+            threading.Thread.__init__(self)
+            self.port=PORT
+            self.bufsize=BUFSIZE
+            self.soc=SOC
+            self.con=CON
+    except Exception,e:
+        print "Error!%s"%e
+        print "Quiting..."
+        SOC.close()
+        os._exit(0)
+
+    def run(self):
+        global MSG
+        global SOC
+        #发送消息初始化为空
+        self.snddata=''
+        self.rem=0
+        self.con.acquire()
+        self.con.wait()
+        while MSG != 2:
+            if MSG == 1:
+                try:
+                    if self.rem == 0:
+                        #接收用户输入的目的IP
+                        self.hostsnd=raw_input('Ip>>>')
+                        self.addrsnd=(self.hostsnd,self.port)
+                        self.rem=1
+                    else:
+                        #接收用户输入的消息
+                        self.snddata=raw_input("Messages>>>")
+                        #用户输入为\q时,退出发送消息界面,启动inputmsg线程
+                        if self.snddata == '\\q':
+                            MSG=0
+                            self.rem=0
+                            self.con.notify()
+                            self.con.wait()
+                        elif self.snddata != '':
+                            #发送消息                           
+                            SOC.sendto(self.snddata,self.addrsnd)
+                        else:
+                            pass
+                except Exception,e:
+                    print "Error!%s"%e
+                    print "Quiting..."
+                    SOC.close()
+                    os._exit(0)
+            else:
+                #MSG=0,继续等待
+                self.con.wait()
+        #跳出循环后,回收指针,退出程序
+        self.con.release()
+        print 'Quiting...'
+        SOC.close()
+        os._exit(0)
+
+class inputmsg(threading.Thread):
+    try:
+        #初始化,传参
+        def __init__(self,MSG,CON,SOC):
+            threading.Thread.__init__(self)
+            self.con=CON
+            self.soc=SOC
+    except Exception,e:
+        print "Error!%s"%e
+        print "Quiting..."
+        SOC.close()
+        os._exit(0)
+
+    def run(self):
+        global MSG
+        global SOC
+        #等待一秒,让sndmsg线程先启动
+        time.sleep(1)
+        self.con.acquire()
+        while MSG != 2:
+            try:
+                if MSG == 0:
+                    self.keyword=raw_input(">>>")
+                    self.keyword=self.keyword.strip()
+                    #输入\t,启动sndmsg线程
+                    if self.keyword=='\\t':
+                        MSG=1
+                        self.con.notify()
+                        self.con.wait()
+                    #输入\q,退出进程
+                    elif self.keyword=='\\q':
+                        MSG=2
+                        self.con.notify()
+                        self.con.release()
+                    else:
+                        print "Use '\\t' to send messages,and use '\\q' to quit!"
+            except Exception,e:
+                print "Error!%s"%e
+                print "Quiting..."
+                SOC.close()
+                os._exit(0)
+
+if __name__ == '__main__':
+    #MSG==0时,执行input线程;MSG==1时,执行send命令;MSG==2时,退出程序
+    global MSG
+    global SOC
+    HOSTRCV=''
+    MSG=0
+    PORT=27711
+    BUFSIZE=4096
+    #创建一个套接字
+    SOC=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+    #创建一个等待线程池
+    CON=threading.Condition()
+    rcv=rcvmsg(HOSTRCV,PORT,BUFSIZE)
+    ipt=inputmsg(MSG,CON,SOC)
+    snd=sndmsg(PORT,BUFSIZE,SOC,CON)
+    print "System running..."
+    print "Use '\\t' to send messages,and use '\\q' to quit!"
+    #启动线程
+    rcv.start()
+    ipt.start()
+    snd.start()
+
+
